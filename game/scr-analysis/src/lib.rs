@@ -216,4 +216,10 @@ impl<'e> Analysis<'e> {
         Some((*self.0.prism_pixel_shaders()).clone())
             .filter(|x| x.len() >= 0x2b)
     }
+
+    pub fn prism_renderer_vtable(&mut self) -> Option<VirtualAddress> {
+        Some(self.0.vtables_for_class(b".?AVPrismRenderer@@"))
+            .filter(|x| x.len() == 1)
+            .map(|x| x[0])
+    }
 }

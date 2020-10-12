@@ -3,6 +3,7 @@ mod commands;
 mod file_hook;
 mod pe_image;
 mod sdf_cache;
+mod shader_replaces;
 mod thiscall;
 
 use std::marker::PhantomData;
@@ -14,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use byteorder::{ByteOrder, LittleEndian};
 use libc::c_void;
+use parking_lot::Mutex;
 use scr_analysis::scarf;
 use winapi::um::libloaderapi::{GetModuleHandleW};
 
@@ -22,6 +24,8 @@ use crate::game_thread;
 use crate::snp;
 
 use sdf_cache::{InitSdfCache, SdfCache};
+use shader_replaces::ShaderReplaces;
+use thiscall::Thiscall;
 
 const NET_PLAYER_COUNT: usize = 12;
 
@@ -80,6 +84,7 @@ pub struct BwScr {
     init_game_data: scarf::VirtualAddress,
     game_command_lengths: Vec<u32>,
     prism_pixel_shaders: Vec<scarf::VirtualAddress>,
+    prism_renderer_vtable: scarf::VirtualAddress,
     /// Some only if hd graphics are to be disabled
     open_file: Option<scarf::VirtualAddress>,
     lobby_create_callback_offset: usize,
@@ -89,11 +94,58 @@ pub struct BwScr {
     sdf_cache: Arc<InitSdfCache>,
     is_replay_seeking: AtomicBool,
     lobby_game_init_command_seen: AtomicBool,
+    shader_replaces: ShaderReplaces,
+    renderer_state: Mutex<RendererState>,
 }
 
 struct SendPtr<T>(T);
 unsafe impl<T> Send for SendPtr<T> {}
 unsafe impl<T> Sync for SendPtr<T> {}
+
+/// Keeps track of pointers to renderer structures as they are collected
+struct RendererState {
+    renderer: Option<*mut c_void>,
+    shader_inputs: Vec<ShaderState>,
+}
+
+#[derive(Copy, Clone)]
+struct ShaderState {
+    shader: *mut scr::Shader,
+    vertex_path: *const u8,
+    pixel_path: *const u8,
+}
+
+impl RendererState {
+    unsafe fn set_renderer(&mut self, renderer: *mut c_void) {
+        self.renderer = Some(renderer);
+    }
+
+    unsafe fn set_shader_inputs(
+        &mut self,
+        shader: *mut scr::Shader,
+        vertex_path: *const u8,
+        pixel_path: *const u8,
+    ) {
+        let id = (*shader).id as usize;
+        if self.shader_inputs.len() <= id {
+            self.shader_inputs.resize_with(id + 1, || ShaderState {
+                shader: null_mut(),
+                vertex_path: null(),
+                pixel_path: null(),
+            });
+        }
+        if self.shader_inputs[id].shader != shader {
+            self.shader_inputs[id] = ShaderState {
+                shader,
+                vertex_path,
+                pixel_path,
+            };
+        }
+    }
+}
+
+unsafe impl Send for RendererState {}
+unsafe impl Sync for RendererState {}
 
 mod scr {
     use libc::{c_void, sockaddr};
@@ -412,6 +464,22 @@ mod scr {
         pub data_len: u32,
     }
 
+    #[repr(C)]
+    pub struct DrawCommands {
+        pub commands: [DrawCommand; 0x2000],
+    }
+
+    #[repr(C)]
+    pub struct DrawCommand {
+        pub data: [u8; 0xa0],
+    }
+
+    #[repr(C)]
+    pub struct Shader {
+        pub id: u32,
+        pub rest: [u8; 0x74],
+    }
+
     unsafe impl Sync for PrismShader {}
     unsafe impl Send for PrismShader {}
 
@@ -427,6 +495,8 @@ mod scr {
         assert_eq!(size_of::<SnpFunctions>(), 0x3c + 0x10 * size_of::<usize>());
         assert_eq!(size_of::<PrismShaderSet>(), 0x8);
         assert_eq!(size_of::<PrismShader>(), 0x10);
+        assert_eq!(size_of::<DrawCommand>(), 0xa0);
+        assert_eq!(size_of::<Shader>(), 0x78);
     }
 }
 
@@ -632,6 +702,7 @@ impl BwScr {
         let init_game_data = analysis.init_game().ok_or("init_game_data")?;
 
         let prism_pixel_shaders = analysis.prism_pixel_shaders().ok_or("Prism pixel shaders")?;
+        let prism_renderer_vtable = analysis.prism_renderer_vtable().ok_or("Prism renderer")?;
 
         let starcraft_tls_index = analysis.get_tls_index().ok_or("TLS index")?;
 
@@ -695,10 +766,16 @@ impl BwScr {
             init_game_data,
             game_command_lengths,
             prism_pixel_shaders,
+            prism_renderer_vtable,
             starcraft_tls_index: SendPtr(starcraft_tls_index),
             sdf_cache,
             is_replay_seeking: AtomicBool::new(false),
             lobby_game_init_command_seen: AtomicBool::new(false),
+            shader_replaces: ShaderReplaces::new(),
+            renderer_state: Mutex::new(RendererState {
+                renderer: None,
+                shader_inputs: Vec::with_capacity(0x30),
+            }),
         })
     }
 
@@ -807,7 +884,7 @@ impl BwScr {
             exe.hook_closure_address(OpenFile, file_hook::open_file_hook, address);
         }
 
-        self.patch_shaders(&mut exe, base);
+        self.clone().patch_shaders(&mut exe, base);
 
         sdf_cache::apply_sdf_cache_hooks(&self, &mut exe, base);
 
@@ -828,39 +905,72 @@ impl BwScr {
         debug!("Patched.");
     }
 
-    unsafe fn patch_shaders(&self, exe: &mut whack::ModulePatcher<'_>, base: usize) {
-        const fn pixel_sm4(wrapper: &[u8]) -> scr::PrismShader {
-            scr::PrismShader {
-                api_type: scr::PRISM_SHADER_API_SM4,
-                shader_type: scr::PRISM_SHADER_TYPE_PIXEL,
-                unk: [0; 6],
-                data: wrapper.as_ptr(),
-                data_len: wrapper.len() as u32,
+    unsafe fn patch_shaders(self: Arc<Self>, exe: &mut whack::ModulePatcher<'_>, base: usize) {
+        use self::hooks::*;
+        let renderer_vtable = self.prism_renderer_vtable.0 as usize as *mut usize;
+
+        let create_shader = *renderer_vtable.add(0x10);
+        // Render hook
+        let relative = *renderer_vtable.add(0x7) - base;
+        let this = self.clone();
+        exe.hook_closure_address(Renderer_Render, move |renderer, commands, width, height, orig| {
+            if this.shader_replaces.has_changed() {
+                // Hot reload shaders.
+                // Unfortunately repatching the .exe to replace shader sets in BW
+                // memory is not currently possible.
+                // Will have to write over the previously allocated scr::PrismShader slice
+                // instead.
+                let create_shader: Thiscall<unsafe extern fn(
+                    *mut c_void, *mut scr::Shader, *const u8, *const u8, *const u8, *mut c_void,
+                ) -> usize> = Thiscall::wrap_thiscall(create_shader);
+                for (id, new_set) in this.shader_replaces.iter_shaders() {
+                    if let Some(shader_set) = this.prism_pixel_shaders.get(id as usize) {
+                        let shader_set = shader_set.0 as usize as *mut scr::PrismShaderSet;
+                        assert!((*shader_set).count as usize == new_set.len());
+                        let out = std::slice::from_raw_parts_mut(
+                            (*shader_set).shaders,
+                            (*shader_set).count as usize,
+                        );
+                        if out[0].data != new_set[0].data {
+                            out.copy_from_slice(new_set);
+                            let args = {
+                                let renderer_state = this.renderer_state.lock();
+                                renderer_state.shader_inputs.get(id as usize).copied()
+                            };
+                            if let Some(args) = args {
+                                create_shader.call6(
+                                    renderer,
+                                    args.shader,
+                                    null(),
+                                    args.vertex_path,
+                                    args.pixel_path,
+                                    null_mut(),
+                                );
+                            }
+                        }
+                    }
+                }
             }
-        }
+            orig(renderer, commands, width, height)
+        }, relative);
 
-        const fn pixel_sm5(wrapper: &[u8]) -> scr::PrismShader {
-            scr::PrismShader {
-                api_type: scr::PRISM_SHADER_API_SM5,
-                shader_type: scr::PRISM_SHADER_TYPE_PIXEL,
-                unk: [0; 6],
-                data: wrapper.as_ptr(),
-                data_len: wrapper.len() as u32,
-            }
-        }
+        // CreateShader hook
+        let relative = create_shader as usize - base;
+        let this = self.clone();
+        exe.hook_closure_address(
+            Renderer_CreateShader,
+            move |renderer, shader, text, vertex, pixel, arg5, orig| {
+                {
+                    let mut renderer_state = this.renderer_state.lock();
+                    renderer_state.set_renderer(renderer);
+                    renderer_state.set_shader_inputs(shader, vertex, pixel);
+                }
+                orig(renderer, shader, text, vertex, pixel, arg5)
+            },
+            relative,
+        );
 
-        static MASK_SM4_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mask.sm4.bin"));
-        static MASK_SM5_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mask.sm5.bin"));
-        static MASK: &[scr::PrismShader] = &[
-            pixel_sm4(MASK_SM4_BIN),
-            pixel_sm5(MASK_SM5_BIN),
-        ];
-
-        static PATCHED_SHADERS: &[(u8, &[scr::PrismShader], &str)] = &[
-            (0x1c, MASK, "mask"),
-        ];
-
-        for &(id, shader_set, name) in PATCHED_SHADERS.iter() {
+        for (id, shader_set) in self.shader_replaces.iter_shaders() {
             if let Some(&address) = self.prism_pixel_shaders.get(id as usize) {
                 let patch = scr::PrismShaderSet {
                     count: shader_set.len() as u32,
@@ -1445,6 +1555,15 @@ mod hooks {
         !0 => LoadSnpList(*mut scr::SnpLoadFuncs, u32) -> u32;
         !0 => CreateEventW(*mut c_void, u32, u32, *const u16) -> *mut c_void;
         !0 => StepIo(@ecx *mut c_void);
+        !0 => Renderer_Render(@ecx *mut c_void, *mut scr::DrawCommands, u32, u32) -> u32;
+        !0 => Renderer_CreateShader(
+            @ecx *mut c_void,
+            *mut scr::Shader,
+            *const u8,
+            *const u8,
+            *const u8,
+            *mut c_void,
+        ) -> usize;
     );
 }
 

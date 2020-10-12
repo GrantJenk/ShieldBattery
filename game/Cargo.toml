@@ -32,7 +32,7 @@ log = "0.4"
 parking_lot = { version = "0.11", features = ["send_guard"] }
 quick-error = "2.0"
 rand = "0.7"
-scopeguard = "1.0"
+scopeguard = "1.1"
 serde = { version = "1.0.89", features = ["derive", "rc"] }
 serde_json = "1.0.39"
 tokio = { version = "0.2", features = ["fs", "net", "rt-threaded", "stream", "sync", "time"] }
@@ -53,17 +53,18 @@ rev = "1adee081ac5ebc8362f92801e2083bbbadd79d57"
 
 [build-dependencies]
 anyhow = "1.0.33"
-scopeguard = "1.1"
-
-[build-dependencies.winapi]
-version = "0.3"
-features = ["d3dcompiler"]
 
 # -- Local helper crates --
 [workspace]
 
 [dependencies.scr-analysis]
 path = "./scr-analysis"
+
+[dependencies.compile-shaders]
+path = "./compile-shaders"
+
+[build-dependencies.compile-shaders]
+path = "./compile-shaders"
 
 [profile.dev.package.scr-analysis]
 # Optimize scr-analysis subcrate as its code takes quite a lot of time to run

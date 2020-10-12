@@ -16,6 +16,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee2a4ec343196209d6594e19543ae87a39f96d5534d7174822a3ad825dd6ed7e"
 
 [[package]]
+name = "anyhow"
+version = "1.0.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1fd36ffbb1fb7c834eac128ea8d0e310c5aeb635548f9d58861e1308d46e71c"
+
+[[package]]
 name = "array-init"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -812,6 +818,7 @@ dependencies = [
 name = "shieldbattery"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arrayvec",
  "backtrace",
  "byteorder",

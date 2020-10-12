@@ -51,6 +51,14 @@ features = [
 git = "https://github.com/neivv/whack/"
 rev = "1adee081ac5ebc8362f92801e2083bbbadd79d57"
 
+[build-dependencies]
+anyhow = "1.0.33"
+scopeguard = "1.1"
+
+[build-dependencies.winapi]
+version = "0.3"
+features = ["d3dcompiler"]
+
 # -- Local helper crates --
 [workspace]
 

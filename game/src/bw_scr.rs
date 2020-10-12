@@ -79,6 +79,7 @@ pub struct BwScr {
     step_io: scarf::VirtualAddress,
     init_game_data: scarf::VirtualAddress,
     game_command_lengths: Vec<u32>,
+    prism_pixel_shaders: Vec<scarf::VirtualAddress>,
     /// Some only if hd graphics are to be disabled
     open_file: Option<scarf::VirtualAddress>,
     lobby_create_callback_offset: usize,
@@ -394,12 +395,38 @@ mod scr {
         pub future_padding: [usize; 0x10],
     }
 
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct PrismShaderSet {
+        pub count: u32,
+        pub shaders: *mut PrismShader,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct PrismShader {
+        pub api_type: u8,
+        pub shader_type: u8,
+        pub unk: [u8; 6],
+        pub data: *const u8,
+        pub data_len: u32,
+    }
+
+    unsafe impl Sync for PrismShader {}
+    unsafe impl Send for PrismShader {}
+
+    pub const PRISM_SHADER_API_SM4: u8 = 0x0;
+    pub const PRISM_SHADER_API_SM5: u8 = 0x4;
+    pub const PRISM_SHADER_TYPE_PIXEL: u8 = 0x6;
+
     #[test]
     fn struct_sizes() {
         use std::mem::size_of;
         assert_eq!(size_of::<JoinableGameInfo>(), 0x84 + 0x24);
         assert_eq!(size_of::<StormPlayer>(), 0x68);
         assert_eq!(size_of::<SnpFunctions>(), 0x3c + 0x10 * size_of::<usize>());
+        assert_eq!(size_of::<PrismShaderSet>(), 0x8);
+        assert_eq!(size_of::<PrismShader>(), 0x10);
     }
 }
 
@@ -604,6 +631,8 @@ impl BwScr {
         let step_io = analysis.step_io().ok_or("step_io")?;
         let init_game_data = analysis.init_game().ok_or("init_game_data")?;
 
+        let prism_pixel_shaders = analysis.prism_pixel_shaders().ok_or("Prism pixel shaders")?;
+
         let starcraft_tls_index = analysis.get_tls_index().ok_or("TLS index")?;
 
         let disable_hd = match std::env::var_os("SB_NO_HD") {
@@ -665,6 +694,7 @@ impl BwScr {
             step_io,
             init_game_data,
             game_command_lengths,
+            prism_pixel_shaders,
             starcraft_tls_index: SendPtr(starcraft_tls_index),
             sdf_cache,
             is_replay_seeking: AtomicBool::new(false),
@@ -777,6 +807,8 @@ impl BwScr {
             exe.hook_closure_address(OpenFile, file_hook::open_file_hook, address);
         }
 
+        self.patch_shaders(&mut exe, base);
+
         sdf_cache::apply_sdf_cache_hooks(&self, &mut exe, base);
 
         drop(exe);
@@ -794,6 +826,50 @@ impl BwScr {
         }
         crate::forge::init_hooks_scr(&mut active_patcher);
         debug!("Patched.");
+    }
+
+    unsafe fn patch_shaders(&self, exe: &mut whack::ModulePatcher<'_>, base: usize) {
+        const fn pixel_sm4(wrapper: &[u8]) -> scr::PrismShader {
+            scr::PrismShader {
+                api_type: scr::PRISM_SHADER_API_SM4,
+                shader_type: scr::PRISM_SHADER_TYPE_PIXEL,
+                unk: [0; 6],
+                data: wrapper.as_ptr(),
+                data_len: wrapper.len() as u32,
+            }
+        }
+
+        const fn pixel_sm5(wrapper: &[u8]) -> scr::PrismShader {
+            scr::PrismShader {
+                api_type: scr::PRISM_SHADER_API_SM5,
+                shader_type: scr::PRISM_SHADER_TYPE_PIXEL,
+                unk: [0; 6],
+                data: wrapper.as_ptr(),
+                data_len: wrapper.len() as u32,
+            }
+        }
+
+        static MASK_SM4_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mask.sm4.bin"));
+        static MASK_SM5_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mask.sm5.bin"));
+        static MASK: &[scr::PrismShader] = &[
+            pixel_sm4(MASK_SM4_BIN),
+            pixel_sm5(MASK_SM5_BIN),
+        ];
+
+        static PATCHED_SHADERS: &[(u8, &[scr::PrismShader], &str)] = &[
+            (0x1c, MASK, "mask"),
+        ];
+
+        for &(id, shader_set, name) in PATCHED_SHADERS.iter() {
+            if let Some(&address) = self.prism_pixel_shaders.get(id as usize) {
+                let patch = scr::PrismShaderSet {
+                    count: shader_set.len() as u32,
+                    shaders: shader_set.as_ptr() as *mut _,
+                };
+                let relative = address.0 as usize - base;
+                exe.replace_val(relative, patch);
+            }
+        }
     }
 
     unsafe fn update_nation_and_human_ids(&self) {

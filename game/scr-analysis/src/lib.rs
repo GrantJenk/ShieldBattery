@@ -209,4 +209,11 @@ impl<'e> Analysis<'e> {
         let tls_ptr = binary.read_u32(tls_address + 0x8).ok()?;
         Some(tls_ptr as *mut u32)
     }
+
+    pub fn prism_pixel_shaders(&mut self) -> Option<Vec<VirtualAddress>> {
+        // As of this writing, there are 0x2b pixel shaders in SC:R;
+        // assume that finding any less is an error.
+        Some((*self.0.prism_pixel_shaders()).clone())
+            .filter(|x| x.len() >= 0x2b)
+    }
 }

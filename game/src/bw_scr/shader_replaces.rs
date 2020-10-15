@@ -158,8 +158,8 @@ fn compile_shader_retry_on_err(path: &Path) -> Option<(&'static [scr::PrismShade
                 // some handles to them for a while or something.
                 // And the memory leaked isn't that many bytes.
                 let result = vec![
-                    pixel_sm4(compile_shaders::wrap_prism_shader(&sm4).leak()),
-                    pixel_sm5(compile_shaders::wrap_prism_shader(&sm5).leak()),
+                    pixel_sm4(compile_shaders::wrap_prism_shader(&sm4.shader).leak()),
+                    pixel_sm5(compile_shaders::wrap_prism_shader(&sm5.shader).leak()),
                 ];
                 Ok((&*result.leak(), modified))
             });
@@ -168,7 +168,7 @@ fn compile_shader_retry_on_err(path: &Path) -> Option<(&'static [scr::PrismShade
             Err(e) => {
                 let msg = format!("Shader compilation failed.\n\
                     File {}\n\
-                    {:?}", path.display(), e);
+                    {}", path.display(), e);
                 crate::windows::message_box("Shieldbattery", &msg);
             }
         }

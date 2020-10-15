@@ -56,13 +56,21 @@ pub fn disassemble(bytes: &[u8]) -> io::Result<Vec<u8>> {
     }
 }
 
+pub struct CompileResults {
+    pub shader: Vec<u8>,
+    /// List of include files opened.
+    /// Used so that build script can tell cargo that they are build inputs
+    /// that must be tracked for changes.
+    pub include_files: Vec<String>,
+}
+
 pub fn compile(
     bytes: &[u8],
     in_defines: &[(&str, &str)],
     shader_dir: &Path,
     shader_type: ShaderType,
     model: ShaderModel,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<CompileResults> {
     unsafe {
         let mut defines = vec![];
         // Hold define strings for the compilation
@@ -114,14 +122,24 @@ pub fn compile(
                 (*errors).Release();
             }
         }
+        if let Some(error) = (*include.0).error.take() {
+            return Err(error);
+        }
         if error != 0 {
             if !errors.is_null() {
                 let errors = blob_to_bytes(errors);
-                println!("ERRORS:\n{}", String::from_utf8_lossy(&errors));
+                let error_msg = String::from_utf8_lossy(&errors);
+                if !error_msg.is_empty() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, error_msg));
+                }
             }
             return Err(io::Error::from_raw_os_error(error));
         }
-        Ok(blob_to_bytes(code))
+        let include_files = std::mem::replace(&mut (*include.0).opened_files, Vec::new());
+        Ok(CompileResults {
+            shader: blob_to_bytes(code),
+            include_files,
+        })
     }
 }
 
@@ -143,6 +161,8 @@ struct IncludeHandler {
     interface: ID3DInclude,
     path: PathBuf,
     buffers: Vec<Vec<u8>>,
+    opened_files: Vec<String>,
+    error: Option<io::Error>,
 }
 
 struct IncludeHandlerHandle(*mut IncludeHandler);
@@ -162,7 +182,9 @@ impl IncludeHandler {
                 lpVtbl: &INCLUDE_VTABLE,
             },
             path,
+            opened_files: Vec::new(),
             buffers: Vec::new(),
+            error: None,
         }));
         IncludeHandlerHandle(ptr)
     }
@@ -185,11 +207,11 @@ impl IncludeHandler {
             Err(_) => return E_FAIL,
         };
         let path = (*s).path.join(filename);
-        println!("cargo:rerun-if-changed={}", path.to_str().unwrap());
+        (*s).opened_files.push(path.to_str().unwrap().into());
         let result = match fs::read(&path) {
             Ok(o) => o,
             Err(e) => {
-                println!("Reading include {} failed: {:?}", path.display(), e);
+                (*s).error = Some(e);
                 return E_FAIL;
             }
         };

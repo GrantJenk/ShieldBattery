@@ -57,8 +57,12 @@ fn compile_prism_shader(
 ) -> Result<(), Error> {
     let text_bytes = fs::read(source_path)
         .with_context(|| format!("Failed to read {}", source_path.display()))?;
-    let shader_bytes =
+    let result =
         compile_shaders::compile(&text_bytes, defines, include_root, shader_type, model)?;
+    for path in result.include_files {
+        println!("cargo:rerun-if-changed={}", path);
+    }
+    let shader_bytes = result.shader;
     let wrapped = compile_shaders::wrap_prism_shader(&shader_bytes);
     fs::write(&out_path, &wrapped)
         .with_context(|| format!("Failed to write {}", out_path.display()))?;

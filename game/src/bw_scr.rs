@@ -480,6 +480,27 @@ mod scr {
         pub rest: [u8; 0x74],
     }
 
+    #[repr(C, packed)]
+    pub struct Sprite {
+        pub prev: *mut Sprite,
+        pub next: *mut Sprite,
+        pub sprite_id: u16,
+        pub player: u8,
+        pub selection_index: u8,
+        pub visibility_mask: u8,
+        pub elevation_level: u8,
+        pub flags: u8,
+        pub selection_flash_timer: u8,
+        pub index: u16,
+        pub width: u8,
+        pub height: u8,
+        pub pos_x: u32,
+        pub pos_y: u32,
+        pub main_image: *mut bw::Image,
+        pub first_image: *mut bw::Image,
+        pub last_image: *mut bw::Image,
+    }
+
     unsafe impl Sync for PrismShader {}
     unsafe impl Send for PrismShader {}
 
@@ -497,6 +518,7 @@ mod scr {
         assert_eq!(size_of::<PrismShader>(), 0x10);
         assert_eq!(size_of::<DrawCommand>(), 0xa0);
         assert_eq!(size_of::<Shader>(), 0x78);
+        assert_eq!(size_of::<Sprite>(), 0x28);
     }
 }
 

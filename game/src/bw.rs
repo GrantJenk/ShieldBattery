@@ -1,3 +1,6 @@
+pub mod list;
+pub mod unit;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -55,6 +58,9 @@ pub trait Bw: Sync + Send {
     unsafe fn game(&self) -> *mut Game;
     unsafe fn players(&self) -> *mut Player;
     unsafe fn set_player_name(&self, id: u8, name: &str);
+
+    unsafe fn active_units(&self) -> unit::UnitIterator;
+    unsafe fn create_fog_sprite(&self, unit: unit::Unit);
 
     /// Note: Size is unspecified, but will not change between calls.
     /// (Remastered has 12 storm players)
@@ -223,7 +229,8 @@ pub struct Image {
     pub parent: *mut c_void,
 }
 
-#[repr(C, packed)]
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct Iscript {
     pub header: u16,
     pub pos: u16,

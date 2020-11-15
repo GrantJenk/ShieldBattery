@@ -10,12 +10,13 @@
 
 pub use samase_scarf::scarf;
 
-use scarf::{BinaryFile, ExecutionStateX86, Operand, OperandCtx, VirtualAddress};
+use scarf::{BinaryFile, ExecutionStateX86, MemAccessSize, Operand, OperandCtx, VirtualAddress};
 use scarf::exec_state::VirtualAddress as VirtualAddressTrait;
 
 pub struct Analysis<'e>(
     samase_scarf::Analysis<'e, ExecutionStateX86<'e>>,
     &'e BinaryFile<VirtualAddress>,
+    OperandCtx<'e>,
 );
 
 impl<'e> Analysis<'e> {
@@ -23,7 +24,18 @@ impl<'e> Analysis<'e> {
         binary: &'e BinaryFile<VirtualAddress>,
         ctx: OperandCtx<'e>,
     ) -> Analysis<'e> {
-        Analysis(samase_scarf::Analysis::new(binary, ctx), binary)
+        Analysis(samase_scarf::Analysis::new(binary, ctx), binary, ctx)
+    }
+
+    fn eud(&mut self, address: u32) -> Option<Operand<'e>> {
+        let euds = self.0.eud_table();
+        let index = euds.euds.binary_search_by_key(&address, |x| x.address).ok()?;
+        Some(euds.euds.get(index)?.operand)
+    }
+
+    #[cfg(target_arch = "x86")]
+    fn mem_word(&self, op: Operand<'e>) -> Operand<'e> {
+        self.2.mem32(op)
     }
 
     pub fn game(&mut self) -> Option<Operand<'e>> {
@@ -221,5 +233,53 @@ impl<'e> Analysis<'e> {
         Some(self.0.vtables_for_class(b".?AVPrismRenderer@@"))
             .filter(|x| x.len() == 1)
             .map(|x| x[0])
+    }
+
+    pub fn first_active_unit(&mut self) -> Option<Operand<'e>> {
+        self.0.active_hidden_units().first_active_unit
+    }
+
+    pub fn sprites_by_y_tile_start(&mut self) -> Option<Operand<'e>> {
+        self.0.sprites().sprite_hlines
+    }
+
+    pub fn sprites_by_y_tile_end(&mut self) -> Option<Operand<'e>> {
+        self.0.sprites().sprite_hlines_end
+    }
+
+    pub fn first_free_sprite(&mut self) -> Option<Operand<'e>> {
+        self.0.sprites().first_free_sprite
+    }
+
+    pub fn last_free_sprite(&mut self) -> Option<Operand<'e>> {
+        self.0.sprites().last_free_sprite
+    }
+
+    pub fn first_active_fow_sprite(&mut self) -> Option<Operand<'e>> {
+        self.0.fow_sprites().first_active
+    }
+
+    pub fn last_active_fow_sprite(&mut self) -> Option<Operand<'e>> {
+        self.0.fow_sprites().last_active
+    }
+
+    pub fn first_free_fow_sprite(&mut self) -> Option<Operand<'e>> {
+        self.0.fow_sprites().first_free
+    }
+
+    pub fn last_free_fow_sprite(&mut self) -> Option<Operand<'e>> {
+        self.0.fow_sprites().last_free
+    }
+
+    pub fn first_free_image(&mut self) -> Option<Operand<'e>> {
+        self.eud(0x0057eb68).map(|x| self.mem_word(x))
+    }
+
+    pub fn last_free_image(&mut self) -> Option<Operand<'e>> {
+        self.eud(0x0057eb70).map(|x| self.mem_word(x))
+    }
+
+    pub fn sprite_y(&mut self) -> Option<(Operand<'e>, u32, MemAccessSize)> {
+        self.0.sprites().sprite_y_position
     }
 }

@@ -13,6 +13,7 @@ use libc::c_void;
 use winapi::um::winnt::HANDLE;
 
 use crate::bw;
+use crate::bw::unit::{Unit, UnitIterator};
 use crate::chat;
 use crate::game_thread;
 use crate::windows;
@@ -117,6 +118,14 @@ impl bw::Bw for Bw1161 {
         (*self.players().add(id as usize)).name = buffer;
     }
 
+    unsafe fn active_units(&self) -> UnitIterator {
+        UnitIterator::new(Unit::from_ptr(*first_active_unit))
+    }
+
+    unsafe fn create_fog_sprite(&self, unit: Unit) {
+        create_fog_sprite((**unit).unit_id as u32, (**unit).sprite);
+    }
+
     unsafe fn storm_players(&self) -> Vec<bw::StormPlayer> {
         (*storm_players)[..].into()
     }
@@ -193,6 +202,9 @@ whack_funcs!(stdcall, init_funcs, 0x00400000,
     0x004CDE70 => add_to_replay_data(@eax *mut bw::ReplayData, @ebx *const u8, @edi u32, u32);
     0x0048D0C0 => display_message(@edi *const u8, @eax u32);
     0x004207B0 => clean_up_for_exit(@ebx u32);
+
+    // Unit id, base sprite
+    0x00488410 => create_fog_sprite(u32, *mut c_void) -> *mut bw::FowSprite;
 );
 
 whack_vars!(init_vars, 0x00400000,
@@ -220,6 +232,7 @@ whack_vars!(init_vars, 0x00400000,
     0x00597248 => primary_selected: *mut bw::Unit;
     0x0057EE7C => storm_id_to_human_id: [u32; 8];
     0x00512678 => current_command_player: u32;
+    0x00628430 => first_active_unit: *mut bw::Unit;
 );
 
 // Misc non-function-level patches

@@ -75,6 +75,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bumpalo"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e8c087f005730276d1096a652e92a8bacee2e2472bcc9715a74d2bec38b5820"
+
+[[package]]
 name = "byteorder"
 version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -734,9 +740,10 @@ checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 [[package]]
 name = "samase_scarf"
 version = "0.1.0"
-source = "git+https://github.com/neivv/samase_scarf/?rev=d7ecee5f7bd014f6e0fbf2c5f2fd8a02514cc281#d7ecee5f7bd014f6e0fbf2c5f2fd8a02514cc281"
+source = "git+https://github.com/neivv/samase_scarf/?rev=8d0e788642cb6195fd36c1c355d888aa48a36abc#8d0e788642cb6195fd36c1c355d888aa48a36abc"
 dependencies = [
  "arrayvec",
+ "bumpalo",
  "byteorder",
  "fxhash",
  "lde 0.3.0 (git+https://github.com/CasualX/lde)",
@@ -744,13 +751,12 @@ dependencies = [
  "memchr",
  "memmem",
  "scarf",
- "smallvec",
 ]
 
 [[package]]
 name = "scarf"
 version = "0.3.0"
-source = "git+https://github.com/neivv/scarf?rev=4da6facdc16e2b4ca77552d6dd88412fb473af65#4da6facdc16e2b4ca77552d6dd88412fb473af65"
+source = "git+https://github.com/neivv/scarf?rev=30a43f5ece2024e913800e0088196d42bf192107#30a43f5ece2024e913800e0088196d42bf192107"
 dependencies = [
  "array-init",
  "arrayvec",
@@ -847,6 +853,7 @@ dependencies = [
  "scr-analysis",
  "serde",
  "serde_json",
+ "smallvec",
  "tokio",
  "tokio-tungstenite",
  "tungstenite",

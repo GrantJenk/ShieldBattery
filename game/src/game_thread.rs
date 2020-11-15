@@ -145,16 +145,16 @@ unsafe fn init_bw() {
 
 /// Bw impl is expected to hook the point after init_game_data and call this.
 pub unsafe fn after_init_game_data() {
-    // Let async thread know about player randomization.
-    // The function that bw_1161/bw_scr refer to as init_game_data mainly initializes global
-    // data structures used in a game. Player randomization seems to have been done before that,
-    // so if it ever in future ends up being the case that the async thread has a point where it
-    // uses wrong game player ids, a more exact point for this hook should be decided.
-    //
-    // But for now it should be fine, and this should also be late enough in initialization that
-    // any possible alternate branches for save/replay/ums randomization should have been executed
-    // as well.
     with_bw(|bw| {
+        // Let async thread know about player randomization.
+        // The function that bw_1161/bw_scr refer to as init_game_data mainly initializes global
+        // data structures used in a game. Player randomization seems to have been done before that,
+        // so if it ever in future ends up being the case that the async thread has a point where it
+        // uses wrong game player ids, a more exact point for this hook should be decided.
+        //
+        // But for now it should be fine, and this should also be late enough in initialization that
+        // any possible alternate branches for save/replay/ums randomization should have been executed
+        // as well.
         let mut mapping = [None; bw::MAX_STORM_PLAYERS];
         let players = bw.players();
         for i in 0..8 {
@@ -164,5 +164,11 @@ pub unsafe fn after_init_game_data() {
             }
         }
         send_game_msg_to_async(GameThreadMessage::PlayersRandomized(mapping));
+        // Create fog-of-war sprites for any neutral buildings
+        for unit in bw.active_units() {
+            if unit.player() == 11 && unit.is_landed_building() {
+                bw.create_fog_sprite(unit);
+            }
+        }
     });
 }

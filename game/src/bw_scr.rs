@@ -30,6 +30,7 @@ use shader_replaces::ShaderReplaces;
 use thiscall::Thiscall;
 
 const NET_PLAYER_COUNT: usize = 12;
+const SHADER_ID_MASK: u32 = 0x1c;
 
 pub struct BwScr {
     game: Value<*mut bw::Game>,
@@ -482,7 +483,10 @@ pub mod scr {
 
     #[repr(C)]
     pub struct DrawCommand {
-        pub data: [u8; 0xa0],
+        pub data: [u8; 0x28],
+        pub shader_id: u32,
+        pub more_data: [u8; 0x24],
+        pub shader_constants: [f32; 0x14],
     }
 
     #[repr(C)]
@@ -1081,6 +1085,17 @@ impl BwScr {
                             }
                         }
                     }
+                }
+            }
+            // Leave unexplored area in UMS maps black
+            let use_new_mask = if crate::game_thread::is_ums() {
+                0.0
+            } else {
+                1.0
+            };
+            for cmd in &mut (*commands).commands {
+                if cmd.shader_id == SHADER_ID_MASK {
+                    cmd.shader_constants[0] = use_new_mask;
                 }
             }
             orig(renderer, commands, width, height)

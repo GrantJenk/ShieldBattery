@@ -1,10 +1,12 @@
 //! Hooks and other code that is running on the game/main thread (As opposed to async threads).
 
 use std::sync::mpsc::Receiver;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use lazy_static::lazy_static;
+use once_cell::sync::OnceCell;
 
+use crate::app_messages::{GameSetupInfo};
 use crate::bw::{self, with_bw};
 use crate::forge;
 use crate::snp;
@@ -15,6 +17,9 @@ lazy_static! {
     pub static ref GAME_RECEIVE_REQUESTS: Mutex<Option<Receiver<GameThreadRequest>>> =
         Mutex::new(None);
 }
+
+// Global for accessing game type/slots/etc from hooks.
+static SETUP_INFO: OnceCell<Arc<GameSetupInfo>> = OnceCell::new();
 
 // Async tasks request game thread to do some work
 pub struct GameThreadRequest {
@@ -38,6 +43,7 @@ pub enum GameThreadRequestType {
     RunWndProc,
     StartGame,
     ExitCleanup,
+    SetupInfo(Arc<GameSetupInfo>),
 }
 
 // Game thread sends something to async tasks
@@ -93,6 +99,11 @@ unsafe fn handle_game_request(request: GameThreadRequestType) {
         // Saves registry settings etc.
         ExitCleanup => {
             with_bw(|bw| bw.clean_up_for_exit());
+        }
+        SetupInfo(info) => {
+            if let Err(_) = SETUP_INFO.set(info) {
+                warn!("Received second SetupInfo");
+            }
         }
     }
 }
@@ -165,10 +176,19 @@ pub unsafe fn after_init_game_data() {
         }
         send_game_msg_to_async(GameThreadMessage::PlayersRandomized(mapping));
         // Create fog-of-war sprites for any neutral buildings
-        for unit in bw.active_units() {
-            if unit.player() == 11 && unit.is_landed_building() {
-                bw.create_fog_sprite(unit);
+        if !is_ums() {
+            for unit in bw.active_units() {
+                if unit.player() == 11 && unit.is_landed_building() {
+                    bw.create_fog_sprite(unit);
+                }
             }
         }
     });
+}
+
+pub fn is_ums() -> bool {
+    SETUP_INFO.get()
+        .and_then(|x| x.game_type())
+        .filter(|x| x.is_ums())
+        .is_some()
 }
